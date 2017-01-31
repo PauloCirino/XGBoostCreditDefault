@@ -1,0 +1,247 @@
+---
+title: "Give me Some Credit"
+author: "Paulo Cirino Ribeiro Neto"
+date: "30/01/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE,
+                      fig.width = 10,
+                      warning = FALSE, error = FALSE,
+                      tidy = TRUE, include = TRUE,
+                      cache = TRUE
+                      )
+```
+
+## Loading Packages
+```{r loadingPackages, results='hide', message=FALSE, warning=FALSE}
+if( class(try(require(gdata))) == 'try-error') install.packages('gdata')
+if( class(try(require(ggplot2))) == 'try-error') install.packages('ggplot2')
+if( class(try(require(plotly))) == 'try-error') install.packages('plotly')
+if( class(try(require(dplyr))) == 'try-error') install.packages('dplyr')
+if( class(try(require(DT))) == 'try-error') install.packages('DT')
+if( class(try(require(reshape))) == 'try-error') install.packages('reshape')
+if( class(try(require(outliers))) == 'try-error') install.packages('outliers')
+if( class(try(require(xgboost))) == 'try-error') install.packages('xgboost')
+if( class(try(require(caret))) == 'try-error') install.packages('caret')
+```
+
+## Reading the Data
+```{r readingTheData}
+testData <- read.csv('./data/cs-test.csv')
+trainData <- read.csv('./data/cs-training.csv')
+dataDict <- read.xls("./data/Data Dictionary.xls", sheet = 1)
+```
+
+
+## Data Dictionary
+```{r dataDict}
+DT::datatable(data = dataDict)
+```
+
+## Train Data Table
+```{r trainData}
+  DT::datatable(data = trainData, options = list(
+                scrollX = TRUE,
+                scrollY = TRUE,
+                scrollCollapse = TRUE,
+                autoWidth = TRUE,
+                fixedColumns = list(leftColumns = 1)
+                )
+  )
+```
+
+## Data Summary
+### Summary all Data
+```{r summaryData}
+summary(trainData)
+```
+
+### Summary Positive Data
+```{r summaryPositiveData}
+summary(trainData %>% dplyr::filter(SeriousDlqin2yrs == 1))
+```
+
+### Summary Negative Data
+```{r summaryNegativeData}
+summary(trainData %>% dplyr::filter(SeriousDlqin2yrs != 1))
+```
+
+### NAs in %
+```{r NAs}
+sapply(trainData, function(x) round(100 * sum(is.na(x)) / nrow(trainData), 2) )
+```
+
+## Exploratory Data Analasys
+### Boxplot In Scale
+```{r boxplot }
+perc <- 1
+auxData <- trainData[sample( nrow(trainData),
+                             round(perc * nrow(trainData))
+                            ), ] %>% 
+  dplyr::select(-X) %>%
+  reshape::melt(id = 'SeriousDlqin2yrs')
+auxData <- auxData %>%
+  inner_join(auxData %>%
+               dplyr::group_by(variable) %>%
+               summarise(Max = max(value)) %>%
+               data.frame(), by = 'variable') %>%
+  dplyr::mutate(ScaledVal = value/Max)
+
+
+
+plotly::plot_ly(data = auxData,
+                x = ~variable,
+                y = ~ScaledVal,
+                color = ~as.factor(SeriousDlqin2yrs)
+                ) %>%
+  plotly::add_boxplot(type = 'box', boxpoints = 'suspectedoutliers') %>%
+  plotly::layout(boxmode = "group")
+
+
+plotly::plot_ly(data = auxData,
+                x = ~variable,
+                y = ~log10(ScaledVal),
+                color = ~as.factor(SeriousDlqin2yrs)
+                ) %>%
+  plotly::add_boxplot(type = 'box', boxpoints = 'suspectedoutliers') %>%
+  plotly::layout(boxmode = "group")
+```
+
+### PDFs
+```{r PDFs }
+ggplot2::ggplot( trainData,
+                       aes(x = RevolvingUtilizationOfUnsecuredLines,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 2) +
+  ggplot2::scale_x_log10()
+
+ggplot2::ggplot( trainData,
+                       aes(x = age,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 2) 
+
+ggplot2::ggplot( trainData,
+                       aes(x = NumberOfTime30.59DaysPastDueNotWorse,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 5) +
+  ggplot2::scale_x_log10()
+
+
+
+ggplot2::ggplot( trainData,
+                       aes(x = DebtRatio,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 5) +
+  ggplot2::scale_x_log10()
+
+
+
+ggplot2::ggplot( trainData,
+                       aes(x = MonthlyIncome,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 2) +
+  ggplot2::scale_x_log10()
+
+
+
+ggplot2::ggplot( trainData,
+                       aes(x = NumberOfOpenCreditLinesAndLoans,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 2) +
+  ggplot2::scale_x_log10()
+
+
+
+ggplot2::ggplot( trainData,
+                       aes(x = NumberOfTimes90DaysLate,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 5) +
+  ggplot2::scale_x_log10()
+
+
+
+ggplot2::ggplot( trainData,
+                       aes(x = NumberRealEstateLoansOrLines,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 5) +
+  ggplot2::scale_x_log10()
+
+
+
+ggplot2::ggplot( trainData,
+                       aes(x = NumberOfTime60.89DaysPastDueNotWorse,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 5) +
+  ggplot2::scale_x_log10()
+
+
+
+ggplot2::ggplot( trainData,
+                       aes(x = NumberOfDependents,
+                           color = as.factor(SeriousDlqin2yrs) )) +  
+  ggplot2::geom_density(adjust = 5) +
+  ggplot2::scale_x_log10()
+```
+
+## Trainning wiht Raw Data
+```{r rawDataTrainning}
+trainDataXGB <- xgb.DMatrix(
+  data = trainData %>% select(-X, -SeriousDlqin2yrs) %>% as.matrix,
+  label = trainData %>% select(SeriousDlqin2yrs) %>% unlist() %>% as.numeric()
+  )
+
+paramList <- list(objective = "binary:logistic", 
+              booster = "gbtree",
+              eta = 0.01,
+              max_depth = 20, 
+              subsample = 0.5,
+              colsample_bytree = 0.5
+)
+
+clf <- xgb.cv(params = paramList, 
+              data = trainDataXGB, 
+              nrounds = 200,
+              verbose = 0,
+              maximize = FALSE,
+              eval_metric = 'auc',
+              nfold = 3
+)
+
+clf$evaluation_log %>%
+  dplyr::select(-contains("std")) %>%
+  reshape::melt(id.vars = 'iter') %>%
+  ggplot(aes(x = iter, y = value, group = variable, color = variable)) + 
+  geom_line() + 
+  theme_bw()
+
+```
+
+## Handling Data
+
+### Missing Values Handling
+```{r missingValues}
+
+```
+
+### Outliers Handling
+```{r outliers, eval = FALSE}
+apply(trainData %>% select(-X, -SeriousDlqin2yrs),
+      2,
+      function(Vet){
+        ScoreZ <- scores(Vet, type = 'z', prob = 0.95)
+        ScoreMAD<- scores(Vet, type = 'mad', prob = 0.95)
+        ScoreIQR <- scores(Vet, type = 'iqr', lim = 1.5)
+        
+        ScoreSum <- as.numeric(ScoreZ) + as.numeric(ScoreMAD) + as.numeric(ScoreIQR)
+      })
+```
+
+### Data Transformations
+```{r dataTransformations}
+
+```
+
+## Training
+
