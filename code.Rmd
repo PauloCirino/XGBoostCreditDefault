@@ -16,22 +16,29 @@ knitr::opts_chunk$set(echo = TRUE, eval = TRUE,
 
 ## Loading Packages
 ```{r loadingPackages, results='hide', message=FALSE, warning=FALSE}
-if( class(try(require(gdata))) == 'try-error') install.packages('gdata')
-if( class(try(require(ggplot2))) == 'try-error') install.packages('ggplot2')
-if( class(try(require(plotly))) == 'try-error') install.packages('plotly')
-if( class(try(require(dplyr))) == 'try-error') install.packages('dplyr')
-if( class(try(require(DT))) == 'try-error') install.packages('DT')
-if( class(try(require(reshape))) == 'try-error') install.packages('reshape')
-if( class(try(require(outliers))) == 'try-error') install.packages('outliers')
-if( class(try(require(xgboost))) == 'try-error') install.packages('xgboost')
-if( class(try(require(caret))) == 'try-error') install.packages('caret')
+if( class(try(library(gdata))) == 'try-error') install.packages('gdata')
+if( class(try(library(ggplot2))) == 'try-error') install.packages('ggplot2')
+if( class(try(library(plotly))) == 'try-error') install.packages('plotly')
+if( class(try(library(dplyr))) == 'try-error') install.packages('dplyr')
+if( class(try(library(DT))) == 'try-error') install.packages('DT')
+if( class(try(library(reshape))) == 'try-error') install.packages('reshape')
+if( class(try(library(outliers))) == 'try-error') install.packages('outliers')
+if( class(try(library(xgboost))) == 'try-error') install.packages('xgboost')
+if( class(try(library(caret))) == 'try-error') install.packages('caret')
+if( class(try(library(caTools))) == 'try-error') install.packages('caTools')
 ```
 
 ## Reading the Data
 ```{r readingTheData}
-testData <- read.csv('./data/cs-test.csv')
+SEED <- 123
+set.seed(SEED)
+validationData <- read.csv('./data/cs-test.csv')
 trainData <- read.csv('./data/cs-training.csv')
 dataDict <- read.xls("./data/Data Dictionary.xls", sheet = 1)
+
+testDataPos <- sample(nrow(trainData), round(nrow(trainData) * 0.3))
+testData <- trainData[testDataPos, ]
+trainData <- trainData[-testDataPos, ]
 ```
 
 
@@ -42,13 +49,13 @@ DT::datatable(data = dataDict)
 
 ## Train Data Table
 ```{r trainData}
-  DT::datatable(data = trainData, options = list(
-                scrollX = TRUE,
-                scrollY = TRUE,
-                scrollCollapse = TRUE,
-                autoWidth = TRUE,
-                fixedColumns = list(leftColumns = 1)
-                )
+DT::datatable(data = trainData, options = list(
+              scrollX = TRUE,
+              scrollY = TRUE,
+              scrollCollapse = TRUE,
+              autoWidth = TRUE,
+              fixedColumns = list(leftColumns = 1)
+              )
   )
 ```
 
@@ -70,7 +77,14 @@ summary(trainData %>% dplyr::filter(SeriousDlqin2yrs != 1))
 
 ### NAs in %
 ```{r NAs}
-sapply(trainData, function(x) round(100 * sum(is.na(x)) / nrow(trainData), 2) )
+sapply(trainData, 
+       function(x){
+        paste( round(100 * sum(is.na(x)) / nrow(trainData),
+                     2),
+               "%"
+              )
+         }
+)
 ```
 
 ## Exploratory Data Analasys
@@ -85,10 +99,10 @@ auxData <- trainData[sample( nrow(trainData),
 auxData <- auxData %>%
   inner_join(auxData %>%
                dplyr::group_by(variable) %>%
-               summarise(Max = max(value)) %>%
+               summarise(Max = max(value),
+                         Min = min(value)) %>%
                data.frame(), by = 'variable') %>%
-  dplyr::mutate(ScaledVal = value/Max)
-
+  dplyr::mutate(ScaledVal = (value-Min)/(Max-Min))
 
 
 plotly::plot_ly(data = auxData,
@@ -128,15 +142,11 @@ ggplot2::ggplot( trainData,
   ggplot2::geom_density(adjust = 5) +
   ggplot2::scale_x_log10()
 
-
-
 ggplot2::ggplot( trainData,
                        aes(x = DebtRatio,
                            color = as.factor(SeriousDlqin2yrs) )) +  
   ggplot2::geom_density(adjust = 5) +
   ggplot2::scale_x_log10()
-
-
 
 ggplot2::ggplot( trainData,
                        aes(x = MonthlyIncome,
@@ -144,15 +154,11 @@ ggplot2::ggplot( trainData,
   ggplot2::geom_density(adjust = 2) +
   ggplot2::scale_x_log10()
 
-
-
 ggplot2::ggplot( trainData,
                        aes(x = NumberOfOpenCreditLinesAndLoans,
                            color = as.factor(SeriousDlqin2yrs) )) +  
   ggplot2::geom_density(adjust = 2) +
   ggplot2::scale_x_log10()
-
-
 
 ggplot2::ggplot( trainData,
                        aes(x = NumberOfTimes90DaysLate,
@@ -160,23 +166,17 @@ ggplot2::ggplot( trainData,
   ggplot2::geom_density(adjust = 5) +
   ggplot2::scale_x_log10()
 
-
-
 ggplot2::ggplot( trainData,
                        aes(x = NumberRealEstateLoansOrLines,
                            color = as.factor(SeriousDlqin2yrs) )) +  
   ggplot2::geom_density(adjust = 5) +
   ggplot2::scale_x_log10()
 
-
-
 ggplot2::ggplot( trainData,
                        aes(x = NumberOfTime60.89DaysPastDueNotWorse,
                            color = as.factor(SeriousDlqin2yrs) )) +  
   ggplot2::geom_density(adjust = 5) +
   ggplot2::scale_x_log10()
-
-
 
 ggplot2::ggplot( trainData,
                        aes(x = NumberOfDependents,
@@ -185,63 +185,368 @@ ggplot2::ggplot( trainData,
   ggplot2::scale_x_log10()
 ```
 
-## Trainning wiht Raw Data
-```{r rawDataTrainning}
+
+## Handling Data
+### Data Transformations
+```{r dataTransformations}
+processData <- function(Data){
+  
+  Data$UnknownNumberOfDependents <- as.integer(is.na(Data$NumberOfDependents))
+  Data$UnknownMonthlyIncome <- as.integer(is.na(Data$MonthlyIncome))
+
+  Data$NoDependents <- as.integer(Data$NumberOfDependents == 0)
+  Data$NoDependents[is.na(Data$NoDependents)] <- 0
+
+  Data$NumberOfDependents[Data$UnknownNumberOfDependents==1] <- 0
+
+  Data$NoIncome <- as.integer(Data$MonthlyIncome == 0)
+  Data$NoIncome[is.na(Data$NoIncome)] <- 0
+
+  Data$MonthlyIncome[Data$UnknownMonthlyIncome==1] <- 0
+
+  Data$ZeroDebtRatio <- as.integer(Data$DebtRatio == 0)
+  Data$UnknownIncomeDebtRatio <- Data$DebtRatio
+  Data$UnknownIncomeDebtRatio[Data$UnknownMonthlyIncome == 0] <- 0
+  Data$DebtRatio[Data$UnknownMonthlyIncome == 1] <- 0
+
+  Data$WeirdRevolvingUtilization <- Data$RevolvingUtilizationOfUnsecuredLines
+  Data$WeirdRevolvingUtilization[!(log(Data$RevolvingUtilizationOfUnsecuredLines) > 3)] <- 0
+  Data$ZeroRevolvingUtilization <- as.integer(Data$RevolvingUtilizationOfUnsecuredLines == 0)
+  Data$RevolvingUtilizationOfUnsecuredLines[log(Data$RevolvingUtilizationOfUnsecuredLines) > 3] <- 0
+  
+  Data$Log.Debt <- log(pmax(Data$MonthlyIncome, rep(1, nrow(Data))) * Data$DebtRatio)
+  Data$Log.Debt[!is.finite(Data$Log.Debt)] <- 0
+  
+  Data$RevolvingLines <- Data$NumberOfOpenCreditLinesAndLoans - Data$NumberRealEstateLoansOrLines
+
+  Data$HasRevolvingLines <- as.integer(Data$RevolvingLines > 0)
+  Data$HasRealEstateLoans <- as.integer(Data$NumberRealEstateLoansOrLines > 0)
+  Data$HasMultipleRealEstateLoans <- as.integer(Data$NumberRealEstateLoansOrLines > 2)
+  Data$EligibleSS <- as.integer(Data$age >= 60)
+  Data$DTIOver33 <- as.integer(Data$NoIncome == 0 & Data$DebtRatio > 0.33)
+  Data$DTIOver43 <- as.integer(Data$NoIncome == 0 & Data$DebtRatio > 0.43)
+  Data$DisposableIncome <- (1 - Data$DebtRatio) * Data$MonthlyIncome
+  Data$DisposableIncome[Data$NoIncome == 1] <- 0
+  
+  Data$RevolvingToRealEstate <- Data$RevolvingLines / (1 + Data$NumberRealEstateLoansOrLines)
+
+  Data$NumberOfTime30.59DaysPastDueNotWorseLarge <- as.integer(Data$NumberOfTime30.59DaysPastDueNotWorse > 90)
+  Data$NumberOfTime30.59DaysPastDueNotWorse96 <- as.integer(Data$NumberOfTime30.59DaysPastDueNotWorse == 96)
+  Data$NumberOfTime30.59DaysPastDueNotWorse98 <- as.integer(Data$NumberOfTime30.59DaysPastDueNotWorse == 98)
+  Data$Never30.59DaysPastDueNotWorse <- as.integer(Data$NumberOfTime30.59DaysPastDueNotWorse == 0)
+  Data$NumberOfTime30.59DaysPastDueNotWorse[Data$NumberOfTime30.59DaysPastDueNotWorse > 90] <- 0
+
+  Data$NumberOfTime60.89DaysPastDueNotWorseLarge <- as.integer(Data$NumberOfTime60.89DaysPastDueNotWorse > 90)
+  Data$NumberOfTime60.89DaysPastDueNotWorse96 <- as.integer(Data$NumberOfTime60.89DaysPastDueNotWorse == 96)
+  Data$NumberOfTime60.89DaysPastDueNotWorse98 <- as.integer(Data$NumberOfTime60.89DaysPastDueNotWorse == 98)
+  Data$Never60.89DaysPastDueNotWorse <- as.integer(Data$NumberOfTime60.89DaysPastDueNotWorse == 0)
+  Data$NumberOfTime60.89DaysPastDueNotWorse[Data$NumberOfTime60.89DaysPastDueNotWorse > 90] <- 0
+  
+  Data$NumberOfTimes90DaysLateLarge <- as.integer(Data$NumberOfTimes90DaysLate > 90)
+  Data$NumberOfTimes90DaysLate96 <- as.integer(Data$NumberOfTimes90DaysLate == 96)
+  Data$NumberOfTimes90DaysLate98 <- as.integer(Data$NumberOfTimes90DaysLate == 98)
+  Data$Never90DaysLate <- as.integer(Data$NumberOfTimes90DaysLate == 0)
+  Data$NumberOfTimes90DaysLate[Data$NumberOfTimes90DaysLate > 90] <- 0
+
+  Data$IncomeDivBy10 <- as.integer(Data$MonthlyIncome %% 10 == 0)
+  Data$IncomeDivBy100 <- as.integer(Data$MonthlyIncome %% 100 == 0)
+  Data$IncomeDivBy1000 <- as.integer(Data$MonthlyIncome %% 1000 == 0)
+  Data$IncomeDivBy5000 <- as.integer(Data$MonthlyIncome %% 5000 == 0)
+  Data$Weird0999Utilization <- as.integer(Data$RevolvingUtilizationOfUnsecuredLines == 0.9999999)
+  Data$FullUtilization <- as.integer(Data$RevolvingUtilizationOfUnsecuredLines == 1)
+  Data$ExcessUtilization <- as.integer(Data$RevolvingUtilizationOfUnsecuredLines > 1)
+
+  Data$NumberOfTime30.89DaysPastDueNotWorse <- Data$NumberOfTime30.59DaysPastDueNotWorse + Data$NumberOfTime60.89DaysPastDueNotWorse
+  Data$Never30.89DaysPastDueNotWorse <- Data$Never60.89DaysPastDueNotWorse * Data$Never30.59DaysPastDueNotWorse
+  
+  Data$NumberOfTimesPastDue <- Data$NumberOfTime30.59DaysPastDueNotWorse + Data$NumberOfTime60.89DaysPastDueNotWorse + Data$NumberOfTimes90DaysLate
+  Data$NeverPastDue <- Data$Never90DaysLate * Data$Never60.89DaysPastDueNotWorse * Data$Never30.59DaysPastDueNotWorse
+  Data$Log.RevolvingUtilizationTimesLines <- log1p(Data$RevolvingLines * Data$RevolvingUtilizationOfUnsecuredLines)
+
+  Data$Log.RevolvingUtilizationOfUnsecuredLines <- log(Data$RevolvingUtilizationOfUnsecuredLines)
+  Data$Log.RevolvingUtilizationOfUnsecuredLines[is.na(Data$Log.RevolvingUtilizationOfUnsecuredLines)] <- 0
+  Data$Log.RevolvingUtilizationOfUnsecuredLines[!is.finite(Data$Log.RevolvingUtilizationOfUnsecuredLines)] <- 0
+  Data$RevolvingUtilizationOfUnsecuredLines <- NULL
+  
+  Data$DelinquenciesPerLine <- Data$NumberOfTimesPastDue / Data$NumberOfOpenCreditLinesAndLoans
+  Data$DelinquenciesPerLine[Data$NumberOfOpenCreditLinesAndLoans == 0] <- 0
+  Data$MajorDelinquenciesPerLine <- Data$NumberOfTimes90DaysLate / Data$NumberOfOpenCreditLinesAndLoans
+  Data$MajorDelinquenciesPerLine[Data$NumberOfOpenCreditLinesAndLoans == 0] <- 0
+  Data$MinorDelinquenciesPerLine <- Data$NumberOfTime30.89DaysPastDueNotWorse / Data$NumberOfOpenCreditLinesAndLoans
+  Data$MinorDelinquenciesPerLine[Data$NumberOfOpenCreditLinesAndLoans == 0] <- 0
+
+  # Now delinquencies per revolving
+  Data$DelinquenciesPerRevolvingLine <- Data$NumberOfTimesPastDue / Data$RevolvingLines
+  Data$DelinquenciesPerRevolvingLine[Data$RevolvingLines == 0] <- 0
+  Data$MajorDelinquenciesPerRevolvingLine <- Data$NumberOfTimes90DaysLate / Data$RevolvingLines
+  Data$MajorDelinquenciesPerRevolvingLine[Data$RevolvingLines == 0] <- 0
+  Data$MinorDelinquenciesPerRevolvingLine <- Data$NumberOfTime30.89DaysPastDueNotWorse / Data$RevolvingLines
+  Data$MinorDelinquenciesPerRevolvingLine[Data$RevolvingLines == 0] <- 0
+
+  
+  Data$Log.DebtPerLine <- Data$Log.Debt - log1p(Data$NumberOfOpenCreditLinesAndLoans)
+  Data$Log.DebtPerRealEstateLine <- Data$Log.Debt - log1p(Data$NumberRealEstateLoansOrLines)
+  Data$Log.DebtPerPerson <- Data$Log.Debt - log1p(Data$NumberOfDependents)
+  Data$RevolvingLinesPerPerson <- Data$RevolvingLines / (1 + Data$NumberOfDependents)
+  Data$RealEstateLoansPerPerson <- Data$NumberRealEstateLoansOrLines / (1 + Data$NumberOfDependents)
+  Data$UnknownNumberOfDependents <- as.integer(Data$UnknownNumberOfDependents)
+  Data$YearsOfAgePerDependent <- Data$age / (1 + Data$NumberOfDependents)
+
+  Data$Log.MonthlyIncome <- log(Data$MonthlyIncome)
+  Data$Log.MonthlyIncome[!is.finite(Data$Log.MonthlyIncome)|is.na(Data$Log.MonthlyIncome)] <- 0
+  Data$MonthlyIncome <- NULL
+  Data$Log.IncomePerPerson <- Data$Log.MonthlyIncome - log1p(Data$NumberOfDependents)
+  Data$Log.IncomeAge <- Data$Log.MonthlyIncome - log1p(Data$age)
+  
+  Data$Log.NumberOfTimesPastDue <- log(Data$NumberOfTimesPastDue)
+  Data$Log.NumberOfTimesPastDue[!is.finite(Data$Log.NumberOfTimesPastDue)] <- 0
+  
+  Data$Log.NumberOfTimes90DaysLate <- log(Data$NumberOfTimes90DaysLate)
+  Data$Log.NumberOfTimes90DaysLate[!is.finite(Data$Log.NumberOfTimes90DaysLate)] <- 0
+
+  Data$Log.NumberOfTime30.59DaysPastDueNotWorse <- log(Data$NumberOfTime30.59DaysPastDueNotWorse)
+  Data$Log.NumberOfTime30.59DaysPastDueNotWorse[!is.finite(Data$Log.NumberOfTime30.59DaysPastDueNotWorse)] <- 0
+  
+  Data$Log.NumberOfTime60.89DaysPastDueNotWorse <- log(Data$NumberOfTime60.89DaysPastDueNotWorse)
+  Data$Log.NumberOfTime60.89DaysPastDueNotWorse[!is.finite(Data$Log.NumberOfTime60.89DaysPastDueNotWorse)] <- 0
+
+  Data$Log.Ratio90to30.59DaysLate <- Data$Log.NumberOfTimes90DaysLate - Data$Log.NumberOfTime30.59DaysPastDueNotWorse
+  Data$Log.Ratio90to60.89DaysLate <- Data$Log.NumberOfTimes90DaysLate - Data$Log.NumberOfTime60.89DaysPastDueNotWorse
+
+  Data$AnyOpenCreditLinesOrLoans <- as.integer(Data$NumberOfOpenCreditLinesAndLoans > 0)
+  Data$Log.NumberOfOpenCreditLinesAndLoans <- log(Data$NumberOfOpenCreditLinesAndLoans)
+  Data$Log.NumberOfOpenCreditLinesAndLoans[!is.finite(Data$Log.NumberOfOpenCreditLinesAndLoans)] <- 0
+  Data$Log.NumberOfOpenCreditLinesAndLoansPerPerson <- Data$Log.NumberOfOpenCreditLinesAndLoans - log1p(Data$NumberOfDependents)
+
+  Data$Has.Dependents <- as.integer(Data$NumberOfDependents > 0)
+  Data$Log.HouseholdSize <- log1p(Data$NumberOfDependents)
+  Data$NumberOfDependents <- NULL
+
+  Data$Log.DebtRatio <- log(Data$DebtRatio)
+  Data$Log.DebtRatio[!is.finite(Data$Log.DebtRatio)] <- 0
+  Data$DebtRatio <- NULL
+
+  Data$Log.DebtPerDelinquency <- Data$Log.Debt - log1p(Data$NumberOfTimesPastDue)
+  Data$Log.DebtPer90DaysLate <- Data$Log.Debt - log1p(Data$NumberOfTimes90DaysLate)
+
+  
+  Data$Log.UnknownIncomeDebtRatio <- log(Data$UnknownIncomeDebtRatio)
+  Data$Log.UnknownIncomeDebtRatio[!is.finite(Data$Log.UnknownIncomeDebtRatio)] <- 0
+  Data$IntegralDebtRatio <- NULL
+  Data$Log.UnknownIncomeDebtRatioPerPerson <- Data$Log.UnknownIncomeDebtRatio - Data$Log.HouseholdSize
+  Data$Log.UnknownIncomeDebtRatioPerLine <- Data$Log.UnknownIncomeDebtRatio - log1p(Data$NumberOfOpenCreditLinesAndLoans)
+  Data$Log.UnknownIncomeDebtRatioPerRealEstateLine <- Data$Log.UnknownIncomeDebtRatio - log1p(Data$NumberRealEstateLoansOrLines)
+  Data$Log.UnknownIncomeDebtRatioPerDelinquency <- Data$Log.UnknownIncomeDebtRatio - log1p(Data$NumberOfTimesPastDue)
+  Data$Log.UnknownIncomeDebtRatioPer90DaysLate <- Data$Log.UnknownIncomeDebtRatio - log1p(Data$NumberOfTimes90DaysLate)
+
+  Data$Log.NumberRealEstateLoansOrLines <- log(Data$NumberRealEstateLoansOrLines)
+  Data$Log.NumberRealEstateLoansOrLines[!is.finite(Data$Log.NumberRealEstateLoansOrLines)] <- 0
+  Data$NumberRealEstateLoansOrLines <- NULL
+  
+  Data$NumberOfOpenCreditLinesAndLoans <- NULL
+  
+  Data$NumberOfTimesPastDue <- NULL
+  Data$NumberOfTimes90DaysLate <- NULL
+  Data$NumberOfTime30.59DaysPastDueNotWorse <- NULL
+  Data$NumberOfTime60.89DaysPastDueNotWorse <- NULL
+
+  Data$LowAge <- as.integer(Data$age < 18)
+  Data$Log.age <- log(Data$age - 17)
+  Data$Log.age[Data$LowAge == 1] <- 0
+  Data$age <- NULL
+  
+  Data
+
+}
+```
+
+```{r processingData}
+trainData <- processData(trainData)
+testData <- processData(testData)
+validationData <- processData(validationData)
+
 trainDataXGB <- xgb.DMatrix(
   data = trainData %>% select(-X, -SeriousDlqin2yrs) %>% as.matrix,
   label = trainData %>% select(SeriousDlqin2yrs) %>% unlist() %>% as.numeric()
   )
+trainLabel <- trainData %>% select(SeriousDlqin2yrs) %>% unlist() %>% as.numeric()
 
-paramList <- list(objective = "binary:logistic", 
-              booster = "gbtree",
-              eta = 0.01,
-              max_depth = 20, 
-              subsample = 0.5,
-              colsample_bytree = 0.5
-)
 
-clf <- xgb.cv(params = paramList, 
-              data = trainDataXGB, 
-              nrounds = 200,
-              verbose = 0,
-              maximize = FALSE,
-              eval_metric = 'auc',
-              nfold = 3
-)
+testDataXGB <- xgb.DMatrix(
+  data = testData %>% select(-X, -SeriousDlqin2yrs) %>% as.matrix,
+  label = testData %>% select(SeriousDlqin2yrs) %>% unlist() %>% as.numeric()
+  )
+testLabel <- testData %>% select(SeriousDlqin2yrs) %>% unlist() %>% as.numeric()
 
-clf$evaluation_log %>%
-  dplyr::select(-contains("std")) %>%
-  reshape::melt(id.vars = 'iter') %>%
-  ggplot(aes(x = iter, y = value, group = variable, color = variable)) + 
-  geom_line() + 
-  theme_bw()
 
-```
-
-## Handling Data
-
-### Missing Values Handling
-```{r missingValues}
-
-```
-
-### Outliers Handling
-```{r outliers, eval = FALSE}
-apply(trainData %>% select(-X, -SeriousDlqin2yrs),
-      2,
-      function(Vet){
-        ScoreZ <- scores(Vet, type = 'z', prob = 0.95)
-        ScoreMAD<- scores(Vet, type = 'mad', prob = 0.95)
-        ScoreIQR <- scores(Vet, type = 'iqr', lim = 1.5)
-        
-        ScoreSum <- as.numeric(ScoreZ) + as.numeric(ScoreMAD) + as.numeric(ScoreIQR)
-      })
-```
-
-### Data Transformations
-```{r dataTransformations}
-
+validationDataXGB <- xgb.DMatrix(
+  data = validationData %>% select(-X, -SeriousDlqin2yrs) %>% as.matrix,
+  label = validationData %>% select(SeriousDlqin2yrs) %>% unlist() %>% as.numeric()
+  )
 ```
 
 ## Training
 
+## Trainning Example
+```{r dataTrainningExample}
+paramList <- list(
+  objective = "binary:logistic", 
+  booster = "gbtree",
+  eta = 0.01,
+  max_depth = 20, 
+  subsample = 0.5,
+  colsample_bytree = 0.5,
+  nthread = 20,
+  eval_metric = "auc"
+)
+
+SEED <- 123
+set.seed(SEED)
+s0 <- Sys.time()
+clfCV <- xgb.cv(params = paramList, 
+              data = trainDataXGB, 
+              nrounds = 1000,
+              verbose = 0,
+              maximize = TRUE,
+              nfold = 3,
+              watchlist = 'test_auc',
+              early_stopping_rounds = 10
+)
+s1 <- Sys.time()
+print(s1- s0)
+
+plotly::plot_ly(data = clfCV$evaluation_log %>%
+                        dplyr::select(-contains("std")) %>%
+                        data.frame() %>%
+                        reshape::melt(id = 'iter'),
+                        text = ~paste(variable, '<br>',
+                                        'iter : ', iter, '<br>',
+                                        'AUC : ', round(value, 4),
+                                        sep = ''),
+                        hoover = text) %>%
+  plotly::add_trace(x = ~iter,
+                    y = ~value,
+                    color = ~variable,
+                    hoveron = 'points+fills',
+                    trace = 'scatter',
+                    scatter = 'markers') %>%
+  plotly::style(xlab = 'Iteração',
+                ylab = 'AUC')
+
+numIters <- which.max(clfCV$evaluation_log$test_auc_mean)
+paramList <- list(
+  objective = "binary:logistic", 
+  booster = "gbtree",
+  eta = 0.01,
+  max_depth = 20, 
+  subsample = 0.5,
+  colsample_bytree = 0.5
+)
+
+clf <- xgb.train(params = paramList, 
+                data = trainDataXGB, 
+                nrounds = 200,
+                maximize = TRUE,
+                eval_metric = 'auc'
+)
+
+resultsProb <- predict(clf, testDataXGB)
+testAUC <- colAUC(resultsProb, testLabel) %>% as.numeric()
+cat('Test AUC = ', testAUC , '\n', sep = '')
+
+CutOff <- 0.2
+caret::confusionMatrix(data = ifelse(resultsProb > CutOff, 1, 0),
+                       reference = testLabel)
+CutOff <- 0.3
+caret::confusionMatrix(data = ifelse(resultsProb > CutOff, 1, 0),
+                       reference = testLabel)
+CutOff <- 0.4
+caret::confusionMatrix(data = ifelse(resultsProb > CutOff, 1, 0),
+                       reference = testLabel)
+CutOff <- 0.5
+caret::confusionMatrix(data = ifelse(resultsProb > CutOff, 1, 0),
+                       reference = testLabel)
+CutOff <- 0.6
+caret::confusionMatrix(data = ifelse(resultsProb > CutOff, 1, 0),
+                       reference = testLabel)
+CutOff <- 0.7
+caret::confusionMatrix(data = ifelse(resultsProb > CutOff, 1, 0),
+                       reference = testLabel)
+```
+
+## Getting the Best Model
+```{r gettingBestModel, echo = FALSE, eval = FALSE, include = FALSE}
+xgbTuneGrid <- expand.grid(
+  objective = "binary:logistic", 
+  booster = "gbtree",
+  eval_metric = "auc",
+  nthread = 20,
+  max_depth = c(5, 15, 25),
+  eta = c(0.3, 0.1, 0.05),
+  subsample = c(0.7),
+  gamma = c(1, 5, 10),
+  min_child_weight = c(1, 10, 50),
+  colsample_bytree = c(0.3, 0.5, 0.7)
+)
+
+NFOLD <- 5
+NROUNDS <- 2000
+EARLY_N_STOP <- 100
+SEED <- 18239
+
+orderedIter <- sample(nrow(xgbTuneGrid))
+
+allResults <- list()
+for(i in 1:nrow(xgbTuneGrid)){
+  
+  cat('Iter = ', i, '/', nrow(xgbTuneGrid), '\n',
+      'At = ', as.character(Sys.time()),
+      '\n', sep = '')
+  
+  i <- orderedIter[i]
+  
+  set.seed(SEED)
+  
+  PARAMS <- xgbTuneGrid[i, ]
+  
+  PARAM_LIST <- list(
+      objective = PARAMS['objective'], 
+      booster = PARAMS['booster'],
+      nthread = PARAMS['nthread'],
+      max_depth = PARAMS['max_depth'],
+      eta = PARAMS['eta'],
+      subsample = PARAMS['subsample'],
+      gamma = PARAMS['gamma'],
+      min_child_weight = PARAMS['min_child_weight'],
+      colsample_bytree = PARAMS['colsample_bytree']
+  )
+  
+  clfCV <- xgb.cv(params = paramList, 
+              data = trainDataXGB, 
+              nrounds = NROUNDS,
+              verbose = 0,
+              maximize = TRUE,
+              nfold = NFOLD,
+              watchlist = 'test_auc',
+              early_stopping_rounds = EARLY_N_STOP
+    )
+  
+    bestIter <- which.max(clfCV$evaluation_log$test_auc_mean)
+    bestResults <- clfCV$evaluation_log[bestIter, ]
+    resultParams <- clfCV$params
+    
+    resultList <- list(bestResults = bestResults,
+                   resultParams = resultParams)
+    allResults[[i]] <- resultList
+    
+    if((i %% 10) == 0){
+      cat('SAVING ALL RESULTS',
+          '\nAt = ', as.character(Sys.time()),
+          '\nIter = ', i,
+          '\n', sep = '')
+      
+      saveRDS(object = allResults,
+              file = './data/GXBoostResults.RDS')
+    }
+}
+```
